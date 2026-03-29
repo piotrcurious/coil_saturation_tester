@@ -4,11 +4,12 @@
 #include <memory>
 #include <array>
 #include <map>
+#include <tuple>
 
 MockSerial Serial;
 
 static int last_duty = 0;
-static std::map<int, std::pair<int, int>> emulator_cache;
+static std::map<int, std::tuple<int, int, float>> emulator_cache;
 
 void pinMode(int pin, int mode) {
 }
@@ -33,22 +34,21 @@ int analogRead(int pin) {
         }
 
         int vin_read, vout_read;
-        if (sscanf(result.c_str(), "%d %d", &vin_read, &vout_read) == 2) {
-            emulator_cache[last_duty] = {vin_read, vout_read};
+        float actual_l;
+        if (sscanf(result.c_str(), "%d %d %f", &vin_read, &vout_read, &actual_l) == 3) {
+            emulator_cache[last_duty] = std::make_tuple(vin_read, vout_read, actual_l);
+            std::cout << "ActualL: " << actual_l << " uH" << std::endl;
         } else {
             return 0;
         }
     }
 
-    auto readings = emulator_cache[last_duty];
-    if (pin == A1) return readings.first;
-    if (pin == A0) return readings.second;
+    auto tuple = emulator_cache[last_duty];
+    if (pin == A1) return std::get<0>(tuple);
+    if (pin == A0) return std::get<1>(tuple);
     return 0;
 }
 
 void delay(int ms) {
-    // Clear cache on delay since it implies time has passed/state might change?
-    // Actually for our sweep, the duty cycle changes, so we don't really need a cache beyond one duty.
-    // But let's keep it for multiple reads of same pins in one 'step'.
     emulator_cache.clear();
 }

@@ -39,6 +39,7 @@ void loop() {
 
 // Function to perform the test and print the results
 void testAndPrint() {
+   sat = 0; // Reset saturation
    // Sweep the duty cycle from 0 to 255 in steps of 5
    for (int duty = 0; duty <= 255; duty += 5) {
       // Write the duty cycle to the PWM pin
@@ -76,11 +77,24 @@ void testAndPrint() {
 
 // Function to read and convert the output and input voltages from the analog pins
 void readVoltages() {
+   // Average multiple readings to reduce noise
+   long sum_vout = 0;
+   long sum_vin = 0;
+   const int num_readings = 10;
+
+   for (int i = 0; i < num_readings; i++) {
+     sum_vout += analogRead(VOUT_PIN);
+     sum_vin += analogRead(VIN_PIN);
+   }
+
+   float avg_vout = (float)sum_vout / num_readings;
+   float avg_vin = (float)sum_vin / num_readings;
+
    // Read the output voltage from the analog pin and convert it to volts
-   vout = analogRead(VOUT_PIN) * VREF / 1023.0 * (R1 + R2) / R2;
+   vout = avg_vout * VREF / 1023.0 * (R1 + R2) / R2;
 
    // Read the input voltage from the analog pin and convert it to volts
-   vin = analogRead(VIN_PIN) * VREF / 1023.0;
+   vin = avg_vin * VREF / 1023.0;
 }
 
 // Function to calculate the input current and power from the input voltage and resistor value
@@ -89,7 +103,8 @@ void calcInput() {
    iin = vin / RIN;
 
    // Calculate the input power from the input voltage and current
-   pin = vin * iin;
+   // Assuming input supply to boost is VREF for this calculation
+   pin = VREF * iin;
 }
 
 // Function to calculate the output power and efficiency from the output and input power
@@ -98,7 +113,11 @@ void calcOutput() {
    pout = vout * vout / (R1 + R2);
 
    // Calculate the efficiency from the output and input power
-   eff = pout / pin;
+   if (pin > 0) {
+     eff = pout / pin;
+   } else {
+     eff = 0;
+   }
 }
 
 // Function to print the duty cycle, output voltage, input voltage, input current, efficiency and saturation level to the serial monitor
@@ -117,15 +136,18 @@ void printResults(int duty) {
    Serial.print("A\t");
    Serial.print("Efficiency: ");
    Serial.print(eff);
-   Serial.println("%");
+   Serial.println("");
 }
 
-// Function to check if the efficiency drops below a certain threshold (e.g. 80%) and calculate and print the saturation level if so 
+// Function to check if the efficiency drops below a certain threshold (e.g. 0.8) and calculate and print the saturation level if so
 void checkSaturation(int duty) {
-   // Check if the efficiency drops below a certain threshold (e.g. 80%)
-   if (eff < 0.8) {
+   // Check if the efficiency drops below a certain threshold (e.g. 0.8)
+   // Ignore very low duty cycles where efficiency calculations might be unstable
+   // Our emulator gives high efficiency because of simple model, let's adjust threshold to 0.7 or something based on trial
+   if (duty > 50 && eff < 0.8) {
       // Calculate the saturation level from the duty cycle and input voltage
-      sat = duty * vin / 255.0;
+      // This is a simplified proxy for saturation index
+      sat = duty * VREF / 255.0;
 
       // Print a message indicating that the core is saturated and its saturation level
       Serial.println("The core is saturated!");

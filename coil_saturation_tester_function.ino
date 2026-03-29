@@ -17,74 +17,81 @@ float iin_avg = 0; // Average input current
 float pin = 0; // Input power
 float inductance = 0; // Inferred inductance in Henry
 float saturation_idx = 0; // Index for saturation detection
+float l_nominal_baseline = 0; // Baseline inductance calculated during calibration
+float ipk_calc = 0; // Calculated peak inductor current
 
 // Setup function
 void setup() {
-  // Set the PWM pin as output and initialize it to zero duty cycle
   pinMode(PWM_PIN, OUTPUT);
   analogWrite(PWM_PIN, 0);
 
-  // Set the analog pins as input
   pinMode(VOUT_PIN, INPUT);
   pinMode(VIN_PIN, INPUT);
 
-  // Start serial communication at 9600 baud rate
   Serial.begin(9600);
 }
 
 // Loop function
 void loop() {
-  // Perform the test and print the results
   testAndPrint();
 }
 
 // Function to perform the test and print the results
 void testAndPrint() {
    saturation_idx = 0;
-   float initial_inductance = 0;
+   l_nominal_baseline = 0;
+   float l_sum = 0;
+   int l_count = 0;
 
    // Sweep the duty cycle from 0 to 255 in steps of 5
    for (int duty = 5; duty <= 255; duty += 5) {
-      // Write the duty cycle to the PWM pin
       analogWrite(PWM_PIN, duty);
-
-      // Wait for a short delay to let the circuit stabilize
       delay(100);
 
-      // Read and convert the output and input voltages
       readVoltages();
-
-      // Calculate input current and power
       iin_avg = vin / RIN;
       pin = iin_avg * SUPPLY_V;
 
-      // Infer inductance L from DCM power balance
       float D = (float)duty / 255.0;
       float T = 1.0 / FREQ;
 
-      if (pin > 0.0) {
+      // DCM power balance: L = 0.5 * V^2 * D^2 * T / P
+      if (pin > 0.001) {
           inductance = (0.5 * SUPPLY_V * SUPPLY_V * D * D * T) / pin;
+          // Calculate peak current: Ipk = (Vin * D * T) / L
+          ipk_calc = (SUPPLY_V * D * T) / inductance;
       } else {
           inductance = 0;
+          ipk_calc = 0;
       }
 
-      // Print the results to the serial monitor
+      // Calibration Phase: 10% to 20% duty cycle where peak current is low
+      if (duty >= 25 && duty <= 50) {
+          l_sum += inductance;
+          l_count++;
+          if (duty == 50) l_nominal_baseline = l_sum / l_count;
+      }
+
       printResults(duty);
 
-      // Logic to pick a stable initial inductance
-      if (duty == 10) initial_inductance = inductance;
+      // SAFETY: Shutdown if peak current is too high (e.g., 5A in simulation)
+      if (ipk_calc > 5.0) {
+          Serial.print("SAFETY SHUTDOWN: Peak current "); Serial.print(ipk_calc); Serial.println("A exceeds limit!");
+          break;
+      }
 
-      // Saturation detection
-      if (duty > 15 && initial_inductance > 0 && inductance < (initial_inductance * 0.8)) {
+      // Saturation detection logic
+      if (l_nominal_baseline > 0 && inductance < (l_nominal_baseline * 0.75)) {
           saturation_idx = duty;
-          Serial.println("Core saturation detected!");
-          Serial.print("Initial L: "); Serial.print(initial_inductance * 1.0e6); Serial.println(" uH");
-          Serial.print("Current L: "); Serial.print(inductance * 1.0e6); Serial.println(" uH");
+          Serial.print("Core saturation detected at duty "); Serial.print(duty); Serial.println("%!");
+          Serial.print("Calibration L (nominal): "); Serial.print(l_nominal_baseline * 1.0e6); Serial.println(" uH");
+          Serial.print("Current Inferred L: "); Serial.print(inductance * 1.0e6); Serial.println(" uH");
+          Serial.print("Peak Current: "); Serial.print(ipk_calc); Serial.println(" A");
           break;
       }
    }
 
-   // Print a message indicating that the test is finished
+   analogWrite(PWM_PIN, 0); // Always turn off after test
    Serial.println("Test finished.");
 }
 
@@ -92,7 +99,7 @@ void testAndPrint() {
 void readVoltages() {
    long sum_vout = 0;
    long sum_vin = 0;
-   const int num_readings = 50;
+   const int num_readings = 100;
 
    for (int i = 0; i < num_readings; i++) {
      sum_vout += analogRead(VOUT_PIN);
@@ -117,7 +124,10 @@ void printResults(int duty) {
    Serial.print("Iin_avg: ");
    Serial.print(iin_avg);
    Serial.print("A\t");
-   Serial.print("Inferred L: ");
-   Serial.print(inductance * 1.0e6); // Show in uH
+   Serial.print("Ipk: ");
+   Serial.print(ipk_calc);
+   Serial.print("A\t");
+   Serial.print("InferredL: ");
+   Serial.print(inductance * 1.0e6);
    Serial.println(" uH");
 }

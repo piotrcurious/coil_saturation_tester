@@ -1,51 +1,51 @@
-# Coil Saturation Tester
+# Precision Coil Measurement Instrument
 
-Arduino firmware to detect if a coil in a boost converter circuit is entering the magnetic saturation stage and infer its inductance.
+Advanced ecosystem for measuring and analyzing coil inductance and magnetic saturation, featuring high-fidelity physics simulation, automated loss calibration, and a real-time PC measurement suite.
 
-## Files
+## Key Components
 
-- `coil_saturation_tester_function.ino`: Main firmware with inductance inference and calibration-based saturation detection logic.
-- `emulator.py`: Python physics emulator that models a DCM boost converter with a continuous soft-saturation model.
-- `arduino_mock.h` / `arduino_mock.cpp`: C++ mocks for the Arduino API.
-- `main.cpp`: Test runner that wraps the Arduino code.
-- `generate_graphs.py`: Script to run the test and generate diagnostic plots comparing inferred and actual inductance.
+- **`precision_coil_meter.ino`**: Command-driven Arduino firmware (ATmega328P) using DCM power-balance logic and on-device grid-search calibration for hardware losses ($V_d$, $R_s$).
+- **`pc_precision_meter.py`**: Tkinter-based PC GUI for real-time visualization of boost response, peak current, and saturation profiles.
+- **`emulator.py`**: High-fidelity Python physics engine modeling DCM boost converter dynamics, soft-saturation ($L$ vs $I_{pk}$), and realistic ADC noise.
+- **`virtual_serial_instrument.py`**: A PTY-based bridge that allows testing the PC GUI using the physics emulator without physical hardware.
 
-## Theory and Inference
+## Features
 
-The firmware uses the power balance equation for a boost converter operating in **Discontinuous Conduction Mode (DCM)** to infer the inductance of the coil.
+- **Automated Calibration**: Solves for component losses to establish a stable inductance baseline.
+- **Real-time Tracking**: Visualizes effective inductance ($L_{eff}$) as a function of duty cycle and peak current.
+- **Data Export**: Save high-resolution dashboards (PNG) and raw measurement telemetry (CSV).
+- **Simulation Suite**: Headless evaluation of firmware accuracy using the C++ Arduino mock and Python emulator.
 
-In DCM, the input power $P$ can be expressed as:
-$$P = \frac{V_{supply}^2 \cdot D^2 \cdot T}{2 L}$$
+## PC Measurement Tool
 
-The firmware solves for $L$:
-$$L = \frac{V_{supply}^2 \cdot D^2 \cdot T}{2 P}$$
+The `pc_precision_meter.py` tool provides a professional laboratory interface for data collection:
 
-### Calibration and Detection
+![PC Tool Dashboard](screenshot_dashboard.png)
 
-1. **Calibration Phase**: During the 10% to 20% duty cycle sweep, the firmware calculates a baseline "nominal" inductance. This is because peak currents are low in this range, ensuring the core is not yet saturated.
-2. **Saturation Detection**: As the duty cycle increases further, the firmware continues to infer $L$. When the inferred $L$ drops below 75% of the calibrated nominal baseline, it signals that the core has entered saturation.
-3. **Noise Immunity**: The firmware uses 100x oversampling (averaging) on analog reads to handle high-frequency switching noise and measurement jitter.
+### Usage
 
-## Testing Environment
+1. **Connect**: Select the serial port and click 'Connect'.
+2. **Calibrate**: Click 'Calibrate' to perform the multi-point loss characterization.
+3. **Sweep**: Click 'Start Sweep' to begin the duty cycle ramp and generate the saturation profile.
+4. **Export**: Use the 'Export CSV' or 'Export PNG' buttons to save your results.
 
-### Prerequisites
+## Simulation and Verification
 
-- `g++`
-- `python3`
-- `matplotlib`
+To verify the instrument's accuracy and firmware logic in the sandbox:
 
-### How to Run
+```bash
+# Headless accuracy evaluation
+g++ -O3 main.cpp arduino_mock.cpp -o arduino_app
+python3 generate_graphs.py
+```
 
-1. **Compile the test binary:**
-   ```bash
-   g++ -o test_arduino main.cpp arduino_mock.cpp -I.
-   ```
+This generates `test_results.png`, showing inferred vs. actual ground-truth inductance.
 
-2. **Run the simulation and generate graphs:**
-   ```bash
-   python3 generate_graphs.py
-   ```
+![Accuracy Results](test_results.png)
 
-The script will produce `test_results.png` which includes a comparison between the firmware's inferred inductance and the emulator's actual (simulated) inductance.
+## Hardware Implementation
 
-![Inductance Comparison](test_results.png)
+- **PWM Pin (9)**: Drives the MOSFET (Direct Timer1 control for frequency agility).
+- **Vout Pin (A0)**: 10x resistive divider feedback.
+- **Vin Pin (A1)**: 1.0 Ohm current sense feedback.
+- **Supply**: 5.0V regulated input.

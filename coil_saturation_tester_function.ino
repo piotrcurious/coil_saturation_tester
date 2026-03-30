@@ -28,7 +28,7 @@ struct CalPoint { float d; float f; float vo; float ii; };
 // Forward declarations
 void calibrateInstrument();
 void runMeasurementSweep();
-void performMeasurements();
+void performMeasurements(int oversample);
 void reportTelemetry(int duty);
 
 #ifndef ARDUINO
@@ -49,28 +49,32 @@ void setup() {
 
 void loop() {
   runMeasurementSweep();
+#ifdef ARDUINO
   delay(10000);
+#else
+  exit(0);
+#endif
 }
 
 void calibrateInstrument() {
     Serial.println("Calibrating losses and nominal inductance...");
 
     CalPoint pts[6];
-    float d_vals[3] = {0.10, 0.14, 0.18};
+    float d_vals[3] = {0.15, 0.22, 0.30}; // Shifted higher for better SNR
 
     for(int i=0; i<3; i++) {
         setPWMFrequency(20000);
         current_freq = 20000.0;
         analogWrite(PWM_PIN, (int)(d_vals[i] * 255));
-        delay(400);
-        performMeasurements();
+        delay(600);
+        performMeasurements(500); // Increased oversampling for calibration
         pts[i*2] = {d_vals[i], 20000.0, vout, iin_avg};
 
         setPWMFrequency(40000);
         current_freq = 40000.0;
         analogWrite(PWM_PIN, (int)(d_vals[i] * 255));
-        delay(400);
-        performMeasurements();
+        delay(600);
+        performMeasurements(500);
         pts[i*2+1] = {d_vals[i], 40000.0, vout, iin_avg};
     }
 
@@ -79,10 +83,9 @@ void calibrateInstrument() {
     float min_err = 1e12;
 
     // Grid search for Vd and Rs
-    // Search Vd from 0.4 to 1.0, Rs from 0 to 1.0
     for (int vd_i = 40; vd_i <= 100; vd_i += 5) {
         float vd = vd_i / 100.0;
-        for (int rs_i = 0; rs_i <= 100; rs_i += 10) {
+        for (int rs_i = 0; rs_i <= 100; rs_i += 5) {
             float rs = rs_i / 100.0;
             float l[6];
             float sum_l = 0;
@@ -90,7 +93,7 @@ void calibrateInstrument() {
             for(int i=0; i<6; i++) {
                 float pg = pts[i].ii * SUPPLY_V;
                 float pn = pg - (pts[i].ii * pts[i].ii * rs);
-                if (pn < 0.005) { valid = false; break; }
+                if (pn < 0.01) { valid = false; break; }
                 float boost = (pts[i].vo + vd) / (pts[i].vo + vd - SUPPLY_V);
                 if (boost < 1.0) { valid = false; break; }
                 l[i] = (0.5 * SUPPLY_V * SUPPLY_V * pts[i].d * pts[i].d * (1.0/pts[i].f)) / pn * boost;
@@ -103,8 +106,12 @@ void calibrateInstrument() {
             for(int i=0; i<6; i++) err_sum += (l[i] - avg_l) * (l[i] - avg_l);
             float rel_err = sqrt(err_sum / 6.0) / avg_l;
 
-            if (rel_err < min_err) {
-                min_err = rel_err;
+            // Penalty for extreme Rs values if error is similar
+            float penalty = 1.0 + (rs * 0.05) + (abs(vd - 0.7) * 0.05);
+            float total_err = rel_err * penalty;
+
+            if (total_err < min_err) {
+                min_err = total_err;
                 best_vd = vd;
                 best_rs = rs;
                 l_nominal = avg_l;
@@ -129,7 +136,7 @@ void runMeasurementSweep() {
    for (int duty = 20; duty <= 240; duty += 2) {
       analogWrite(PWM_PIN, duty);
       delay(80);
-      performMeasurements();
+      performMeasurements(150);
 
       float D = (float)duty / 255.0;
       float T = 1.0 / current_freq;
@@ -153,9 +160,8 @@ void runMeasurementSweep() {
    analogWrite(PWM_PIN, 0);
 }
 
-void performMeasurements() {
+void performMeasurements(int oversample) {
    long sum_vout = 0, sum_vin = 0;
-   const int oversample = 150;
    for (int i = 0; i < oversample; i++) {
      sum_vout += analogRead(VOUT_PIN);
      sum_vin += analogRead(VIN_PIN);

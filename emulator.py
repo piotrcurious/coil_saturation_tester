@@ -1,73 +1,100 @@
-import sys
-import random
+import argparse
 import math
+import random
+import sys
 
-# Realistic Boost Converter Physics Emulator
-def simulate(duty, f=20000.0, noise=0.0005):
-    V_in = 5.0
-    T = 1.0 / f
-    R_load = 500.0
-    L0 = 500e-6
-    Isat = 0.5      # Lowered to see more saturation
-    V_d = 0.7       # Realistic Schottky/Silicon mix
-    R_s = 0.3
-    VREF = 5.0
-    RIN = 1.0
+def main():
+    if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
+        # Support positional args for faster mock integration
+        # Usage: python3 emulator.py <duty_8bit> <freq_hz>
+        duty_8bit = float(sys.argv[1])
+        freq = float(sys.argv[2])
+        duty = duty_8bit / 255.0
+        vin_val = 5.0
+        rs_val = 0.1
+        vd_val = 0.7
+        l0_val = 500e-6
+        rload_val = 1000.0
+    else:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--duty", type=float, default=0.5)
+        parser.add_argument("--freq", type=float, default=20000)
+        parser.add_argument("--vin", type=float, default=5.0)
+        parser.add_argument("--rs", type=float, default=0.1)
+        parser.add_argument("--vd", type=float, default=0.7)
+        parser.add_argument("--l0", type=float, default=500e-6)
+        parser.add_argument("--rload", type=float, default=1000.0)
+        args = parser.parse_args()
+        duty = args.duty
+        freq = args.freq
+        vin_val = args.vin
+        rs_val = args.rs
+        vd_val = args.vd
+        l0_val = args.l0
+        rload_val = args.rload
 
-    D = duty / 255.0
-    if D < 0.001:
-        V_out_off = max(0, V_in - V_d)
-        return 0, int((V_out_off / 10.0 / VREF) * 1023), L0
+    # Model parameters
+    D = duty
+    T = 1.0 / freq
 
-    t_on = D * T
+    # We need to solve for Vout and Ipk/L simultaneously because L depends on Ipk
+    # Ipk = (Vin * D * T) / L
+    # But L = f(Ipk)
 
-    # Physics with saturation
-    phase = (V_in * t_on) / (L0 * Isat)
-    if phase > 1.56: phase = 1.56
-    I_pk = Isat * math.tan(phase)
-    E_on = - L0 * (Isat**2) * math.log(math.cos(phase))
+    def get_l(ipk):
+        # Sigmoid saturation: L(ipk) = L0 * (1 - scale / (1 + exp(-(ipk - center)/width)))
+        # Make it start later: center = 0.6A, width = 0.15A
+        center = 0.6
+        width = 0.15
+        scale = 0.8
+        l_curr = l0_val * (1.0 - scale / (1.0 + math.exp(-(ipk - center)/width)))
+        return l_curr
 
-    # V_out(V_out + V_d - V_in) = f * E_on * R_load
-    K = f * E_on * R_load
-    b = V_d - V_in
-    V_out = (-b + math.sqrt(b**2 + 4*K)) / 2.0
-    V_out = max(V_out, V_in - V_d)
+    # Fixed point iteration for Ipk and L
+    ipk = (vin_val * D * T) / l0_val
+    for _ in range(10):
+        l_curr = get_l(ipk)
+        ipk = (vin_val * D * T) / l_curr
 
-    P_out = V_out**2 / R_load
+    # Power balance: Pin_gross = Pout + Ploss_rs
+    # Pin_gross = (Vin^2 * D^2 * T) / (2 * L) * (Vout + Vd) / (Vout + Vd - Vin)
+    # Pout = Vout^2 / Rload
+    # Iin = Pin_gross / Vin
+    # Ploss_rs = Iin^2 * Rs
 
-    # I_in * V_in = P_out + I_in^2 * R_s + P_diode
-    # P_diode = I_out_avg * V_d.
-    # In DCM, I_out_avg = I_in_avg * (Vin / Vout) approx.
-    # Let's simplify: P_in_gross = P_out + Losses
-    # I_in = (P_out / (V_out/(V_out+V_d))) / V_in ?
-    # Let's use: Pin = Pout * (Vout + Vd) / Vout + Iin^2 * Rs
-    # Pin = Pout * (1 + Vd/Vout) + Iin^2 * Rs
-    P_net = P_out * (1.0 + V_d/V_out)
+    p_coil = (vin_val**2 * D**2 * T) / (2 * l_curr)
 
-    # Rs * Iin^2 - Vin * Iin + P_net = 0
-    disc = V_in**2 - 4 * R_s * P_net
-    if disc < 0: I_in_avg = V_in / (2 * R_s)
-    else: I_in_avg = (V_in - math.sqrt(disc)) / (2 * R_s)
+    # Solve for Vout:
+    # Vout^2 / Rload + (Pin_gross/Vin)^2 * Rs - Pin_gross = 0
+    # where Pin_gross = p_coil * (Vout + Vd) / (Vout + Vd - Vin)
 
-    L_actual = L0 / (1.0 + (I_pk / Isat)**2)
+    def find_vout():
+        v_low = vin_val + 0.001
+        v_high = 100.0
+        for _ in range(50):
+            vo = (v_low + v_high) / 2
+            boost = (vo + vd_val) / (vo + vd_val - vin_val)
+            pg = p_coil * boost
+            iin = pg / vin_val
+            loss = iin**2 * rs_val
+            pout = vo**2 / rload_val
+            if pout + loss > pg:
+                v_high = vo
+            else:
+                v_low = vo
+        return (v_low + v_high) / 2
 
-    read_vin = int((I_in_avg * RIN / VREF) * 1023 + (random.random()-0.5) * noise * 1023)
-    read_vout = int((V_out / 10.0 / VREF) * 1023 + (random.random()-0.5) * noise * 1023)
+    vout = find_vout()
+    iin = (p_coil * (vout + vd_val) / (vout + vd_val - vin_val)) / vin_val
 
-    return max(0, min(1023, read_vin)), max(0, min(1023, read_vout)), L_actual
+    # Add ADC noise (~0.5% Gaussian)
+    vout_noise = vout * (1.0 + random.gauss(0, 0.005))
+    iin_noise = iin * (1.0 + random.gauss(0, 0.005))
+
+    # Output for the C++ mock to read: <vin_adc> <vout_adc> <actual_l_uh>
+    vin_adc = int(iin_noise * 1.0 / 5.0 * 1023)
+    vout_adc = int(vout_noise / (5.0 * 10.0) * 1023)
+    print(f"{vin_adc} {vout_adc} {l_curr*1e6:.3f}")
 
 if __name__ == "__main__":
-    freq = 20000.0
-    if len(sys.argv) > 2:
-        try: freq = float(sys.argv[2])
-        except: pass
-
-    if len(sys.argv) > 1:
-        try:
-            duty = int(sys.argv[1])
-            vin, vout, actual_l = simulate(duty, f=freq)
-            print(f"{vin} {vout} {actual_l*1e6}")
-        except:
-            print("0 0 0")
-    else:
-        print("0 0 0")
+    main()

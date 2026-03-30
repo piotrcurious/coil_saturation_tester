@@ -1,63 +1,51 @@
-# Advanced Coil Measurement Instrument
+# Precision Coil Measurement Instrument
 
-Precision Arduino firmware to measure and track coil inductance across its full operating range, with automatic calibration for power losses and magnetic saturation detection.
+Advanced ecosystem for measuring and analyzing coil inductance and magnetic saturation, featuring high-fidelity physics simulation, automated loss calibration, and a real-time PC measurement suite.
 
-## Key Features
+## Key Components
 
-- **Automated Loss Calibration**: Uses a dual-frequency (20kHz/40kHz), multi-point grid search to automatically solve for diode forward voltage ($V_d$) and series resistance ($R_s$).
-- **Precision Inductance Inference**: Employs an advanced DCM power-balance model that accounts for $V_{in}$ and $V_{out}$ boost factors:
-  $$L = \frac{V_{in}^2 \cdot D^2 \cdot T}{2 \cdot (P_{gross} - I_{in}^2 \cdot R_s)} \cdot \frac{V_{out} + V_d}{V_{out} + V_d - V_{in}}$$
-- **Saturation Tracking**: Real-time tracking of effective inductance as a function of peak current ($I_{pk}$), allowing for the detection of core saturation.
-- **Mock & Emulator Suite**: Includes a C++ Arduino hardware mock and a Python physics engine for high-fidelity offline verification.
+- **`precision_coil_meter.ino`**: Command-driven Arduino firmware (ATmega328P) using DCM power-balance logic and on-device grid-search calibration for hardware losses ($V_d$, $R_s$).
+- **`pc_precision_meter.py`**: Tkinter-based PC GUI for real-time visualization of boost response, peak current, and saturation profiles.
+- **`emulator.py`**: High-fidelity Python physics engine modeling DCM boost converter dynamics, soft-saturation ($L$ vs $I_{pk}$), and realistic ADC noise.
+- **`virtual_serial_instrument.py`**: A PTY-based bridge that allows testing the PC GUI using the physics emulator without physical hardware.
 
-## Project Structure
+## Features
 
-- `coil_saturation_tester_function.ino`: Core firmware logic (Arduino IDE compatible).
-- `emulator.py`: Python physics engine modeling a DCM boost converter with soft-saturation (L vs. Ipk) and ADC noise.
-- `arduino_mock.h / .cpp`: C++ framework to simulate the Arduino environment on a PC.
-- `main.cpp`: Entry point for the simulated hardware environment.
-- `generate_graphs.py`: Automated evaluation suite that runs the simulation and produces diagnostic dashboards.
+- **Automated Calibration**: Solves for component losses to establish a stable inductance baseline.
+- **Real-time Tracking**: Visualizes effective inductance ($L_{eff}$) as a function of duty cycle and peak current.
+- **Data Export**: Save high-resolution dashboards (PNG) and raw measurement telemetry (CSV).
+- **Simulation Suite**: Headless evaluation of firmware accuracy using the C++ Arduino mock and Python emulator.
 
-## Calibration and Accuracy
+## PC Measurement Tool
 
-The instrument performs an initial 6-point calibration sweep to minimize measurement variance. In simulations with realistic noise and losses, it achieves:
-- **Parameter Recovery**: Successfully identifies diode voltage (e.g., $V_d \approx 1.0V$) and coil resistance.
-- **Inductance Precision**: Maintains an average error of **<10%** compared to the actual instantaneous inductance across the full duty cycle range.
-- **Robustness**: Uses up to 500x oversampling during calibration to filter out ADC noise.
+The `pc_precision_meter.py` tool provides a professional laboratory interface for data collection:
 
-## Getting Started
+![PC Tool Dashboard](screenshot_dashboard.png)
 
-### Prerequisites
+### Usage
 
-- `g++` (C++11 or higher)
-- `python3`
-- `matplotlib` and `numpy` (optional, for graphing)
+1. **Connect**: Select the serial port and click 'Connect'.
+2. **Calibrate**: Click 'Calibrate' to perform the multi-point loss characterization.
+3. **Sweep**: Click 'Start Sweep' to begin the duty cycle ramp and generate the saturation profile.
+4. **Export**: Use the 'Export CSV' or 'Export PNG' buttons to save your results.
 
-### Evaluation Suite
+## Simulation and Verification
 
-To run the full simulation and generate the diagnostic dashboard:
+To verify the instrument's accuracy and firmware logic in the sandbox:
 
 ```bash
-# 1. Compile the hardware mock
+# Headless accuracy evaluation
 g++ -O3 main.cpp arduino_mock.cpp -o arduino_app
-
-# 2. Run the evaluation script
 python3 generate_graphs.py
 ```
 
-This will produce `test_results.png`, which contains:
-1. **Output Voltage**: Measured vs. Ideal CCM boost curve.
-2. **Peak Current**: Tracked peak current through the coil.
-3. **Inductance Tracking**: Comparison of inferred effective $L$ vs. simulated actual $L$.
-4. **Saturation Curve**: $L$ vs. $I_{pk}$ showing the magnetic saturation profile.
-5. **Measurement Error %**: Relative error between inferred and actual values.
-6. **Input Current**: Average current consumption.
+This generates `test_results.png`, showing inferred vs. actual ground-truth inductance.
 
-![Diagnostic Dashboard](test_results.png)
+![Accuracy Results](test_results.png)
 
 ## Hardware Implementation
 
-- **PWM Pin (9)**: Drives the boost converter MOSFET.
-- **Vout Pin (A0)**: Monitors output voltage via a 10x resistive divider.
-- **Vin Pin (A1)**: Monitors average input current via a 1.0 Ohm sense resistor.
-- **Supply Voltage**: 5.0V regulated input.
+- **PWM Pin (9)**: Drives the MOSFET (Direct Timer1 control for frequency agility).
+- **Vout Pin (A0)**: 10x resistive divider feedback.
+- **Vin Pin (A1)**: 1.0 Ohm current sense feedback.
+- **Supply**: 5.0V regulated input.

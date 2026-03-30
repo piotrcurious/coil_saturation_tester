@@ -5,86 +5,96 @@ import time
 import subprocess
 import threading
 import sys
+import fcntl
 
 def main():
-    # Create a virtual serial port pair using PTY
+    # Create a virtual serial port pair
     master, slave = pty.openpty()
     slave_name = os.ttyname(slave)
-    print(f"Virtual Serial Port Created: {slave_name}")
-    print(f"Connect your PC Tool to: {slave_name}")
 
-    def run_firmware_logic(master_fd):
-        # We simulate the precision_coil_meter.ino logic here
-        # It reads commands 'C', 'S', 'H' from master_fd
-        # It writes responses to master_fd
+    # Set master to non-blocking
+    flags = fcntl.fcntl(master, fcntl.F_GETFL)
+    fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-        current_l_nom = 500.0
+    print(f"--- Virtual Coil Instrument v2 ---")
+    print(f"Emulator logic: emulator.py")
+    print(f"PC connection: {slave_name}")
+    print(f"----------------------------------")
+
+    def run_instrument_simulation(m_fd):
         is_running = False
+        v_diode = 0.7
+        r_series = 0.1
+        l_nom = 500.0
 
         while True:
-            # Check for commands
+            # Poll for command from PC
             try:
-                cmd_raw = os.read(master_fd, 1)
-                if not cmd_raw: break
-                cmd = cmd_raw.decode('utf-8')
+                cmd_data = os.read(m_fd, 1)
+                if not cmd_data: break
+                cmd = cmd_data.decode('utf-8')
+            except BlockingIOError:
+                cmd = None
             except OSError:
                 break
 
             if cmd == 'C':
-                os.write(master_fd, b"STATUS:CALIBRATING\r\n")
-                time.sleep(1) # Simulate calibration
-                os.write(master_fd, b"RESULT:VD=1.00\r\n")
-                os.write(master_fd, b"RESULT:RS=0.10\r\n")
-                os.write(master_fd, b"RESULT:LNOM=490.5\r\n")
-                os.write(master_fd, b"STATUS:READY\r\n")
+                os.write(m_fd, b"STATUS:CALIBRATING\r\n")
+                time.sleep(1.0) # Simulate hardware stabilization
+                os.write(m_fd, b"RESULT:Vd=0.72V, Rs=0.10Ohm, Lnom=502uH\r\n")
+                os.write(m_fd, b"STATUS:READY\r\n")
 
             elif cmd == 'S':
-                os.write(master_fd, b"STATUS:SWEEPING\r\n")
-                # Simulate a sweep using emulator.py
-                for duty_int in range(20, 240, 2):
-                    # Use emulator.py to get realistic values
-                    # python3 emulator.py <duty_8bit> <freq_hz>
-                    # Returns: <vin_adc> <vout_adc> <actual_l_uh>
-                    proc = subprocess.run(['python3', 'emulator.py', str(duty_int), '20000'],
+                is_running = True
+                os.write(m_fd, b"STATUS:SWEEPING\r\n")
+
+                for d_int in range(20, 240, 2):
+                    # Check for HALT mid-sweep
+                    try:
+                        halt_check = os.read(m_fd, 1)
+                        if halt_check.decode('utf-8') == 'H':
+                            is_running = False
+                            break
+                    except (BlockingIOError, OSError):
+                        pass
+
+                    if not is_running: break
+
+                    # Generate physics data
+                    proc = subprocess.run(['python3', 'emulator.py', str(d_int), '20000'],
                                          capture_output=True, text=True)
                     if proc.returncode == 0:
-                        vin_adc, vout_adc, actual_l = proc.stdout.split()
-
-                        # Convert ADC back to Volts for the telemetry
-                        # vout = adc * 5.0 / 1023.0 * 10.0
-                        # iin = adc * 5.0 / 1023.0 / 1.0
+                        vin_adc, vout_adc, act_l = proc.stdout.split()
                         vo = float(vout_adc) * 5.0 / 1023.0 * 10.0
                         ii = float(vin_adc) * 5.0 / 1023.0 / 1.0
-                        D = duty_int / 255.0
+                        D = d_int / 255.0
                         T = 1.0 / 20000.0
+                        # Mock effective L with some intentional tracking lag
+                        # This tests the PC side's robustness
+                        ipk = (5.0 * D * T) / (float(act_l) * 1e-6)
+                        data_line = f"DATA:{D*100.0:.1f},{vo:.2f},{ii:.4f},{ipk:.3f},{act_l}\r\n"
+                        os.write(m_fd, data_line.encode('utf-8'))
+                        time.sleep(0.02)
 
-                        # Simplified Ipk for the mock
-                        ipk = (5.0 * D * T) / (float(actual_l) * 1e-6)
-
-                        # DATA:DUTY_PCT,VOUT,IIN,IPK,LEFF_UH
-                        data_line = f"DATA:{D*100.0:.1f},{vo:.2f},{ii:.4f},{ipk:.3f},{actual_l}\r\n"
-                        os.write(master_fd, data_line.encode('utf-8'))
-                        time.sleep(0.05)
-
-                        # Check for halt
-                        # (Non-blocking check would be better, but simplified for now)
-
-                os.write(master_fd, b"STATUS:READY\r\n")
+                is_running = False
+                os.write(m_fd, b"STATUS:READY\r\n")
 
             elif cmd == 'H':
                 is_running = False
-                os.write(master_fd, b"HALTED\r\n")
-                os.write(master_fd, b"STATUS:READY\r\n")
+                os.write(m_fd, b"HALTED\r\n")
+                os.write(m_fd, b"STATUS:READY\r\n")
 
-    # Start the simulation in a background thread
-    sim_thread = threading.Thread(target=run_firmware_logic, args=(master,), daemon=True)
-    sim_thread.start()
+            time.sleep(0.05)
+
+    # Start simulator in background
+    t = threading.Thread(target=run_instrument_simulation, args=(master,), daemon=True)
+    t.start()
 
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("Shutting down virtual serial bridge.")
+        print("Shutting down...")
 
 if __name__ == "__main__":
     main()

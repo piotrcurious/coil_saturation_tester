@@ -46,19 +46,22 @@ void loop() {
     } else if (cmd == 'H') {
       is_running = false;
       analogWrite(PWM_PIN, 0);
-      Serial.println("HALTED");
+      Serial.println("STATUS:HALTED");
     }
   }
 }
 
 void setPWMFrequency(long f) {
-#ifndef ARDUINO
-  // In mock environment, this might trigger a popen change or just set a global
   current_freq = (float)f;
-#else
-  // Real Arduino Timer 1 setup for frequency 'f'
-  current_freq = (float)f;
-  // Implementation omitted for brevity - standard Timer1 register manipulation
+#ifdef ARDUINO
+  // Configure Timer 1 for Phase-Correct PWM at frequency 'f' (Hz) on Pins 9, 10
+  // Formula: F_pwm = 16MHz / (2 * prescaler * TOP)
+  // TOP = 16MHz / (2 * 1 * f) for prescaler=1
+  unsigned int top = 8000000L / f;
+
+  TCCR1A = _BV(COM1A1) | _BV(WGM11); // Phase Correct PWM, Clear OC1A on Compare Match
+  TCCR1B = _BV(WGM13) | _BV(CS10);    // Mode 10 (PWM, Phase Correct, TOP=ICR1), Prescaler=1
+  ICR1 = top;
 #endif
 }
 
